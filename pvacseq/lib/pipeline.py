@@ -1,8 +1,4 @@
 import sys
-from pathlib import Path # if you haven't already done so
-root = str(Path(__file__).resolve().parents[1])
-sys.path.append(root)
-
 from abc import ABCMeta, abstractmethod
 import os
 import csv
@@ -12,6 +8,9 @@ try:
 except ValueError:
     import lib
 from lib.prediction_class import *
+from lib.input_file_converter import *
+from lib.fasta_generator import *
+from lib.output_parser import *
 import shutil
 
 def status_message(msg):
@@ -66,10 +65,10 @@ class Pipeline(metaclass=ABCMeta):
             status_message("TSV file already exists. Skipping.")
             return
 
-        convert_params = [
-            self.input_file,
-            self.tsv_file_path(),
-        ]
+        convert_params = {
+            'input_file' : self.input_file,
+            'output_file': self.tsv_file_path(),
+        }
         for attribute in [
             'gene_expn_file',
             'transcript_expn_file',
@@ -81,12 +80,13 @@ class Pipeline(metaclass=ABCMeta):
             'trna_indels_coverage_file'
         ]:
             if getattr(self, attribute):
-                param = '--' + attribute
-                param = param.replace('_', '-')
-                convert_params.extend([param, getattr(self, attribute)])
+                convert_params[attribute] = getattr(self, attribute)
+            else:
+                convert_params[attribute] = None
 
-        lib.convert_vcf.main(convert_params)
-        status_message("Completed")
+        converter = InputFileConverter(**convert_params)
+        converter.execute()
+        print("Completed")
 
     def tsv_entry_count(self):
         with open(self.tsv_file_path()) as tsv_file:
@@ -316,16 +316,16 @@ class MHCIPipeline(Pipeline):
                 continue
             split_fasta_key_file_path = split_fasta_file_path + '.key'
             status_message("Generating Variant Peptide FASTA and Key Files - Entries %s" % (fasta_chunk))
-            generate_fasta_params = [
-                split_tsv_file_path,
-                str(self.peptide_sequence_length),
-                str(min(self.epitope_lengths)),
-                split_fasta_file_path,
-                split_fasta_key_file_path,
-            ]
-            if self.downstream_sequence_length:
-                generate_fasta_params.extend(['-d', self.downstream_sequence_length,])
-            lib.generate_fasta.main(generate_fasta_params)
+            generate_fasta_params = {
+                'input_file'                : split_tsv_file_path,
+                'peptide_sequence_length'   : self.peptide_sequence_length,
+                'epitope_length'            : min(self.epitope_lengths),
+                'output_file'               : split_fasta_file_path,
+                'output_key_file'           : split_fasta_key_file_path,
+                'downstream_sequence_length': self.downstream_sequence_length,
+            }
+            fasta_generator = FastaGenerator(**generate_fasta_params)
+            fasta_generator.execute()
         status_message("Completed")
 
     def call_iedb_and_parse_outputs(self, chunks):
@@ -379,16 +379,16 @@ class MHCIPipeline(Pipeline):
                     if len(split_iedb_output_files) > 0:
                         status_message("Parsing IEDB Output for Allele %s and Epitope Length %s - Entries %s" % (a, epl, fasta_chunk))
                         split_tsv_file_path = "%s_%s" % (self.tsv_file_path(), tsv_chunk)
-                        params = [
-                            *split_iedb_output_files,
-                            split_tsv_file_path,
-                            split_fasta_key_file_path,
-                            split_parsed_file_path,
-                            '-m', self.top_score_metric,
-                        ]
-                        if self.top_result_per_mutation == True:
-                            params.append('-t')
-                        lib.parse_output.main(params)
+                        params = {
+                            'input_iedb_files'       : split_iedb_output_files,
+                            'input_tsv_file'         : split_tsv_file_path,
+                            'key_file'               : split_fasta_key_file_path,
+                            'output_file'            : split_parsed_file_path,
+                            'top_score_metric'       : self.top_score_metric,
+                            'top_result_per_mutation': self.top_result_per_mutation
+                        }
+                        parser = OutputParser(**params)
+                        parser.execute()
                         status_message("Completed")
                         split_parsed_output_files.append(split_parsed_file_path)
         return split_parsed_output_files
@@ -410,16 +410,16 @@ class MHCIIPipeline(Pipeline):
                 continue
             split_fasta_key_file_path = split_fasta_file_path + '.key'
             status_message("Generating Variant Peptide FASTA and Key Files - Entries %s" % (fasta_chunk))
-            generate_fasta_params = [
-                split_tsv_file_path,
-                str(self.peptide_sequence_length),
-                '9', #This is the default core epitope length for IEDB class ii predictions
-                split_fasta_file_path,
-                split_fasta_key_file_path,
-            ]
-            if self.downstream_sequence_length:
-                generate_fasta_params.extend(['-d', self.downstream_sequence_length,])
-            lib.generate_fasta.main(generate_fasta_params)
+            generate_fasta_params = {
+                'input_file'                : split_tsv_file_path,
+                'peptide_sequence_length'   : self.peptide_sequence_length,
+                'epitope_length'            : 9,
+                'output_file'               : split_fasta_file_path,
+                'output_key_file'           : split_fasta_key_file_path,
+                'downstream_sequence_length': self.downstream_sequence_length,
+            }
+            fasta_generator = FastaGenerator(**generate_fasta_params)
+            fasta_generator.execute()
         status_message("Completed")
 
     def call_iedb_and_parse_outputs(self, chunks):
@@ -467,16 +467,16 @@ class MHCIIPipeline(Pipeline):
                 if len(split_iedb_output_files) > 0:
                     status_message("Parsing IEDB Output for Allele %s - Entries %s" % (a, fasta_chunk))
                     split_tsv_file_path = "%s_%s" % (self.tsv_file_path(), tsv_chunk)
-                    params = [
-                        *split_iedb_output_files,
-                        split_tsv_file_path,
-                        split_fasta_key_file_path,
-                        split_parsed_file_path,
-                        '-m', self.top_score_metric,
-                    ]
-                    if self.top_result_per_mutation == True:
-                        params.append('-t')
-                    lib.parse_output.main(params)
+                    params = {
+                        'input_iedb_files'       : split_iedb_output_files,
+                        'input_tsv_file'         : split_tsv_file_path,
+                        'key_file'               : split_fasta_key_file_path,
+                        'output_file'            : split_parsed_file_path,
+                        'top_score_metric'       : self.top_score_metric,
+                        'top_result_per_mutation': self.top_result_per_mutation
+                    }
+                    parser = OutputParser(**params)
+                    parser.execute()
                     status_message("Completed")
                     split_parsed_output_files.append(split_parsed_file_path)
 

@@ -1,15 +1,6 @@
 import sys
-from pathlib import Path # if you haven't already done so
-root = str(Path(__file__).resolve().parents[1])
-sys.path.append(root)
-
 import argparse
 import os
-
-try:
-    from .. import lib
-except ValueError:
-    import lib
 from lib.prediction_class import *
 from lib.pipeline import *
 from lib.config_files import additional_input_file_list_options
@@ -206,7 +197,7 @@ def main(args_input = sys.argv[1:]):
     if args.downstream_sequence_length == 'full':
         downstream_sequence_length = None
     elif args.downstream_sequence_length.isdigit():
-        downstream_sequence_length = args.downstream_sequence_length
+        downstream_sequence_length = int(args.downstream_sequence_length)
     else:
         sys.exit("The downstream sequence length needs to be a positive integer or 'full'")
 
